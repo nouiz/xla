@@ -63,6 +63,7 @@ limitations under the License.
 #include "tsl/platform/errors.h"
 #include "tsl/platform/fingerprint.h"
 #include "tsl/platform/logging.h"
+#include "tsl/platform/protobuf.h"
 #include "tsl/platform/status.h"
 #include "tsl/platform/statusor.h"
 
@@ -351,6 +352,18 @@ void HloModule::ReplaceComputations(
 }
 
 void HloModule::Print(Printer* printer, const HloPrintOptions& options) const {
+  // TODO: Is there a way to only print non-default values?
+  printer->Append("//DebugOptions(~XLA_FLAGS):: ");
+  tsl::protobuf::TextFormat::Printer tsl_printer;
+  tsl_printer.SetSingleLineMode(true);
+  //  tsl_printer.SetPrintDefaults(true);
+  std::string serialized_debug_options;
+  if (!tsl_printer.PrintToString(config().debug_options(),
+			     &serialized_debug_options)) {
+    return tsl::errors::FailedPrecondition("Unable to convert proto to text.");
+  }
+  printer->Append(serialized_debug_options);
+  printer->Append("\n\n");
   printer->Append("HloModule ");
   if (options.print_ids()) {
     // When print_ids() is false, exclude module's name because it includes and
