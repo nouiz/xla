@@ -3061,6 +3061,7 @@ HloScheduleGraph::HloScheduleGraph(
     current_pos++;
 
     n->cost_ = latency_estimator->NodeCost(instr);
+    scheduling_context->ObserveInstructionCost(*instr, n->cost_);
     auto resources_span = async_tracker->GetResourcesFromInstruction(*instr);
     ResourcesVector resources(resources_span.begin(), resources_span.end());
     HloGraphNode::Rare r;
@@ -3170,15 +3171,12 @@ HloScheduleGraph::HloScheduleGraph(
           num_successors[from_index]++;
           num_predecessors[to_index]++;
         } else {
-          if (estimator != nullptr) {
-            // Use overload of AddDependency that uses estimator to look up
-            // latency
-            HloGraphNode::AddDependency(from, to, estimator);
-          } else {
-            // Use overload of AddDependency that explicitly specifies latency
-            // value
-            HloGraphNode::AddDependency(from, to, 1);
-          }
+          LatencyEstimator::TimeCost latency =
+              estimator != nullptr ? estimator->GetLatencyBetween(*from, *to)
+                                   : LatencyEstimator::TimeCost{1};
+          HloGraphNode::AddDependency(from, to, latency);
+          scheduling_context->ObserveEdgeLatency(from->GetInstr(),
+                                                 to->GetInstr(), latency);
         }
       };
 

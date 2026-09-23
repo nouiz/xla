@@ -51,6 +51,7 @@ limitations under the License.
 #include "xla/service/hlo_cost_analysis.h"
 #include "xla/service/hlo_module_config.h"
 #include "xla/service/llvm_compiler.h"
+#include "xla/service/xla_transform.h"
 #include "xla/stream_executor/device_description.h"
 #include "xla/stream_executor/device_description.pb.h"
 #include "xla/stream_executor/dnn.h"
@@ -103,11 +104,12 @@ class GpuCompiler : public LLVMCompiler {
   absl::StatusOr<std::unique_ptr<CompiledModule>> Export(
       Executable* executable) override;
 
-  absl::Status RunPostSchedulingPipelines(HloModule* module,
-                                          int64_t scheduler_mem_limit,
-                                          const GpuTopology& gpu_topology,
-                                          const GpuAliasInfo* alias_info,
-                                          mlir::MLIRContext* mlir_context);
+  absl::Status RunPostSchedulingPipelines(
+      HloModule* module, int64_t scheduler_mem_limit,
+      const GpuTopology& gpu_topology, const GpuAliasInfo* alias_info,
+      mlir::MLIRContext* mlir_context,
+      std::shared_ptr<const HloXlaTransformContext> transform_context =
+          nullptr);
 
   std::string target_triple() const { return target_triple_; }
   std::string data_layout() const { return data_layout_; }

@@ -676,10 +676,13 @@ DelayMoveToHostAsyncStartCandidateCondition(
 
 // Adds necessary passes to perform latency hiding estimations for the
 // `pipeline`.
-absl::Status RunLatencyHidingSchedulerPasses(
-    HloModule* module, int pointer_size, absl::string_view fingerprint,
-    uint64_t memory_limit, const se::DeviceDescription& gpu_device_info,
-    mlir::MLIRContext* mlir_context, const GpuAliasInfo* alias_info) {
+absl::StatusOr<std::shared_ptr<const HloXlaTransformContext>>
+RunLatencyHidingSchedulerPasses(HloModule* module, int pointer_size,
+                                absl::string_view fingerprint,
+                                uint64_t memory_limit,
+                                const se::DeviceDescription& gpu_device_info,
+                                mlir::MLIRContext* mlir_context,
+                                const GpuAliasInfo* alias_info) {
   tsl::profiler::TraceMe traceme("RunLatencyHidingSchedulerPasses");
   HloPassPipeline pipeline("latency-hiding-scheduler");
   const DebugOptions& options = module->config().debug_options();
@@ -706,6 +709,17 @@ absl::Status RunLatencyHidingSchedulerPasses(
   std::unique_ptr<LatencyEstimator> estimator =
       GetLatencyEstimator(*module, pointer_size, gpu_device_info, fingerprint,
                           config, mlir_context);
+  std::string analysis_source = "XLA GPU latency estimator";
+  if (dynamic_cast<ProfileGuidedLatencyEstimator*>(estimator.get()) !=
+      nullptr) {
+    analysis_source = "PGLE with XLA cost-model fallback";
+  } else if (dynamic_cast<AnalyticalLatencyEstimator*>(estimator.get()) !=
+             nullptr) {
+    analysis_source = "XLA analytical cost model";
+  } else if (dynamic_cast<SolLatencyEstimator*>(estimator.get()) != nullptr) {
+    analysis_source = "XLA SOL cost model";
+  }
+  const double cycles_per_microsecond = estimator->CyclesPerMicrosecond();
 
   if (NeedAccuracyChecker(options, *estimator)) {
     pipeline.AddPass<PGLEAccuracyChecker>(
@@ -719,10 +733,27 @@ absl::Status RunLatencyHidingSchedulerPasses(
       options.xla_gpu_experimental_collective_start_as_early_as_possible();
   auto async_tracker = std::make_unique<GpuAsyncTracker>(config);
 
+  struct SchedulingAnalysisValues {
+    absl::flat_hash_map<std::string, double> costs_us;
+    absl::flat_hash_map<std::pair<std::string, std::string>, double>
+        latencies_us;
+  };
+  auto analysis = std::make_shared<SchedulingAnalysisValues>();
   std::shared_ptr<const SchedulingContext> scheduling_context =
       std::make_shared<const SchedulingContext>(
           module, std::move(estimator), std::move(async_tracker), alias_info,
-          shape_size_in_bytes);
+          shape_size_in_bytes,
+          [analysis, cycles_per_microsecond](const HloInstruction& instruction,
+                                             LatencyEstimator::TimeCost cost) {
+            analysis->costs_us[instruction.name()] =
+                cost / cycles_per_microsecond;
+          },
+          [analysis, cycles_per_microsecond](
+              const HloInstruction& source, const HloInstruction& target,
+              LatencyEstimator::TimeCost latency) {
+            analysis->latencies_us[{source.name(), target.name()}] =
+                latency / cycles_per_microsecond;
+          });
 
   auto gpu_early_scheduling_rule =
       [&prioritize_compute_over_async_start, &config](
@@ -833,7 +864,29 @@ absl::Status RunLatencyHidingSchedulerPasses(
                                            std::move(scheduler_core));
   pipeline.AddPass<SchedulingInstructionAnnotator>();
 
-  return pipeline.Run(module).status();
+  ABSL_RETURN_IF_ERROR(pipeline.Run(module).status());
+
+  auto context = std::make_shared<HloXlaTransformContext>();
+  context->scheduling_analysis.emplace();
+  context->scheduling_analysis_source = std::move(analysis_source);
+  std::vector<std::pair<std::string, double>> costs(analysis->costs_us.begin(),
+                                                    analysis->costs_us.end());
+  absl::c_sort(costs);
+  for (const auto& [name, cost_us] : costs) {
+    auto* cost = context->scheduling_analysis->add_costs();
+    cost->set_name(name);
+    cost->set_cost_us(cost_us);
+  }
+  std::vector<std::pair<std::pair<std::string, std::string>, double>> latencies(
+      analysis->latencies_us.begin(), analysis->latencies_us.end());
+  absl::c_sort(latencies);
+  for (const auto& [edge, latency_us] : latencies) {
+    auto* latency = context->scheduling_analysis->add_latencies();
+    latency->set_source(edge.first);
+    latency->set_target(edge.second);
+    latency->set_latency_us(latency_us);
+  }
+  return context;
 }
 
 absl::StatusOr<HloSchedule> ScheduleGpuModuleWithMemoryScheduler(
@@ -1004,9 +1057,13 @@ absl::StatusOr<ScheduleMetadata> ScheduleGpuModule(
   // Run Latency Hiding Scheduler (LHS). It maximizes the compute-communication
   // overlap, potentially at the cost of memory usage.
   if (enable_latency_hiding_scheduler) {
-    ABSL_RETURN_IF_ERROR(RunLatencyHidingSchedulerPasses(
-        module, pointer_size, fingerprint, memory_limit, gpu_device_info,
-        mlir_context, alias_info));
+    ABSL_ASSIGN_OR_RETURN(
+        std::shared_ptr<const HloXlaTransformContext> transform_context,
+        RunLatencyHidingSchedulerPasses(module, pointer_size, fingerprint,
+                                        memory_limit, gpu_device_info,
+                                        mlir_context, alias_info));
+    return ScheduleMetadata{memory_limit, peak_memory_bytes,
+                            std::move(transform_context)};
   }
 
   return ScheduleMetadata{memory_limit, peak_memory_bytes};

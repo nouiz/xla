@@ -391,6 +391,7 @@ cc_library(
         "@com_google_absl//absl/status:status_macros",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
+        "@tsl//tsl/profiler/protobuf:profiled_instructions_proto_cc",
     ],
 )
 

@@ -17,15 +17,23 @@ limitations under the License.
 #define XLA_SERVICE_XLA_TRANSFORM_H_
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
+#include "tsl/profiler/protobuf/profiled_instructions.pb.h"
 #include "xla/hlo/ir/hlo_module.h"
 #include "xla/hlo/pass/hlo_pass_interface.h"
 #include "xla/service/hlo.pb.h"
 
 namespace xla {
+
+struct HloXlaTransformContext {
+  std::optional<tensorflow::profiler::ProfiledInstructionsProto>
+      scheduling_analysis;
+  std::string scheduling_analysis_source;
+};
 
 // An XlaTransform is a user-defined transformation, which is applied at a
 // user-specified stage of the XLA compilation pipeline.
@@ -59,6 +67,13 @@ class HloXlaTransform : public XlaTransformBase {
   // transform fails, otherwise returns true if any change was made to the
   // module.
   virtual absl::StatusOr<bool> Transform(xla::HloModule* module) = 0;
+
+  // Applies the transform with optional compiler analysis. Existing transforms
+  // can keep implementing the one-argument overload.
+  virtual absl::StatusOr<bool> Transform(
+      xla::HloModule* module, const HloXlaTransformContext* context) {
+    return Transform(module);
+  }
 };
 
 // Registers a user's HloXlaTransform implementation to be applied at the
@@ -91,7 +106,8 @@ bool ClearHloXlaTransform(HloXlaTransform::PipelineStage stage,
 // given module. Returns an error if any transform fails, otherwise returns true
 // if any transform made a change to the module. Thread-safe.
 absl::StatusOr<bool> ApplyXlaTransformsToModule(
-    HloXlaTransform::PipelineStage stage, xla::HloModule* module);
+    HloXlaTransform::PipelineStage stage, xla::HloModule* module,
+    const HloXlaTransformContext* context = nullptr);
 
 class TargetVerifierMetadata;
 class HloVerifier;
@@ -103,7 +119,8 @@ class ApplyXlaTransforms : public HloModulePass {
  public:
   explicit ApplyXlaTransforms(
       HloXlaTransform::PipelineStage stage,
-      std::unique_ptr<TargetVerifierMetadata> target_metadata = nullptr);
+      std::unique_ptr<TargetVerifierMetadata> target_metadata = nullptr,
+      std::shared_ptr<const HloXlaTransformContext> context = nullptr);
   ~ApplyXlaTransforms() override;
 
   absl::string_view name() const override { return name_; }
@@ -116,6 +133,7 @@ class ApplyXlaTransforms : public HloModulePass {
   HloXlaTransform::PipelineStage stage_;
   std::string name_;
   std::unique_ptr<HloVerifier> verifier_;
+  std::shared_ptr<const HloXlaTransformContext> context_;
 };
 
 // Replaces the contents of `module` with the HloModule described by

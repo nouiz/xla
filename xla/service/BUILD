@@ -6603,6 +6603,7 @@ cc_library(
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:string_view",
         "@com_google_absl//absl/synchronization",
+        "@tsl//tsl/profiler/protobuf:profiled_instructions_proto_cc",
     ],
 )
 

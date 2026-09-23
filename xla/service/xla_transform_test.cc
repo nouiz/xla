@@ -15,14 +15,13 @@ limitations under the License.
 
 #include "xla/service/xla_transform.h"
 
-#include <gmock/gmock.h>
-#include <gtest/gtest.h>
-
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include <gmock/gmock.h>
+#include <gtest/gtest.h>
 #include "absl/log/log.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
@@ -58,6 +57,26 @@ class TrivialTransform : public HloXlaTransform {
   absl::StatusOr<bool> Transform(xla::HloModule* module) override {
     return true;
   }
+};
+
+class ContextTransform : public HloXlaTransform {
+ public:
+  explicit ContextTransform(bool* saw_analysis)
+      : HloXlaTransform("context_transform"), saw_analysis_(saw_analysis) {}
+
+  absl::StatusOr<bool> Transform(xla::HloModule*) override { return false; }
+
+  absl::StatusOr<bool> Transform(
+      xla::HloModule*, const HloXlaTransformContext* context) override {
+    *saw_analysis_ = context != nullptr &&
+                     context->scheduling_analysis.has_value() &&
+                     context->scheduling_analysis->costs_size() == 1 &&
+                     context->scheduling_analysis_source == "test cost model";
+    return false;
+  }
+
+ private:
+  bool* saw_analysis_;
 };
 
 class XlaTransformTest : public ::testing::Test {
@@ -128,6 +147,31 @@ TEST_F(XlaTransformTest, ApplyTransforms) {
       ApplyXlaTransformsToModule(HloXlaTransform::PipelineStage::kPreScheduler,
                                  module.get()));
   EXPECT_TRUE(changed);
+}
+
+TEST_F(XlaTransformTest, ApplyTransformsWithContext) {
+  constexpr absl::string_view kHloText = R"(
+    HloModule test_module
+    ENTRY test_computation {
+      ROOT p0 = f32[] parameter(0)
+    }
+  )";
+  ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(kHloText));
+
+  bool saw_analysis = false;
+  RegisterHloXlaTransform(HloXlaTransform::PipelineStage::kPostScheduler,
+                          std::make_shared<ContextTransform>(&saw_analysis));
+  HloXlaTransformContext context;
+  context.scheduling_analysis.emplace();
+  context.scheduling_analysis->add_costs()->set_name("p0");
+  context.scheduling_analysis_source = "test cost model";
+
+  ASSERT_OK_AND_ASSIGN(
+      bool changed,
+      ApplyXlaTransformsToModule(HloXlaTransform::PipelineStage::kPostScheduler,
+                                 module.get(), &context));
+  EXPECT_FALSE(changed);
+  EXPECT_TRUE(saw_analysis);
 }
 
 TEST_F(XlaTransformTest, TransformMixedPrecisionPad) {
@@ -205,6 +249,14 @@ TEST_F(XlaTransformTest, PjrtCApiExtension) {
     xla::HloModuleProto proto;
     EXPECT_TRUE(proto.ParseFromString(
         absl::string_view(args->hlo_module.data, args->hlo_module.size)));
+    tensorflow::profiler::ProfiledInstructionsProto analysis;
+    EXPECT_TRUE(analysis.ParseFromString(absl::string_view(
+        args->scheduling_analysis.data, args->scheduling_analysis.size)));
+    ASSERT_EQ(analysis.costs_size(), 1);
+    EXPECT_EQ(analysis.costs(0).name(), "add");
+    EXPECT_EQ(absl::string_view(args->scheduling_analysis_source.data,
+                                args->scheduling_analysis_source.size),
+              "test cost model");
 
     DebugOptions debug_options;
     ASSERT_OK_AND_ASSIGN(auto config, HloModule::CreateModuleConfigFromProto(
@@ -260,13 +312,17 @@ TEST_F(XlaTransformTest, PjrtCApiExtension) {
   )";
 
   ASSERT_OK_AND_ASSIGN(auto module, ParseAndReturnUnverifiedModule(hlo_text));
+  HloXlaTransformContext context;
+  context.scheduling_analysis.emplace();
+  context.scheduling_analysis->add_costs()->set_name("add");
+  context.scheduling_analysis_source = "test cost model";
 
   LOG(INFO) << "HloModule before XLA transforms:\n" << module->ToString();
 
   ASSERT_OK_AND_ASSIGN(
       bool changed,
       ApplyXlaTransformsToModule(HloXlaTransform::PipelineStage::kPreScheduler,
-                                 module.get()));
+                                 module.get(), &context));
   EXPECT_TRUE(changed);
 
   LOG(INFO) << "HloModule after XLA transforms:\n" << module->ToString();

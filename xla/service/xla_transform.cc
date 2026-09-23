@@ -107,7 +107,8 @@ bool ClearHloXlaTransform(HloXlaTransform::PipelineStage stage,
 }
 
 absl::StatusOr<bool> ApplyXlaTransformsToModule(
-    HloXlaTransform::PipelineStage stage, xla::HloModule* module) {
+    HloXlaTransform::PipelineStage stage, xla::HloModule* module,
+    const HloXlaTransformContext* context) {
   std::vector<std::shared_ptr<HloXlaTransform>> transforms;
   {
     absl::MutexLock transforms_lock(transforms_mutex);
@@ -120,7 +121,8 @@ absl::StatusOr<bool> ApplyXlaTransformsToModule(
   }
   bool changed = false;
   for (auto& transform : transforms) {
-    ABSL_ASSIGN_OR_RETURN(bool transform_changed, transform->Transform(module));
+    ABSL_ASSIGN_OR_RETURN(bool transform_changed,
+                          transform->Transform(module, context));
     changed |= transform_changed;
   }
   return changed;
@@ -128,8 +130,9 @@ absl::StatusOr<bool> ApplyXlaTransformsToModule(
 
 ApplyXlaTransforms::ApplyXlaTransforms(
     HloXlaTransform::PipelineStage stage,
-    std::unique_ptr<TargetVerifierMetadata> target_metadata)
-    : stage_(stage) {
+    std::unique_ptr<TargetVerifierMetadata> target_metadata,
+    std::shared_ptr<const HloXlaTransformContext> context)
+    : stage_(stage), context_(std::move(context)) {
   static std::atomic<int64_t> next_id{0};
   name_ = absl::StrCat("apply-xla-transforms-", next_id.fetch_add(1));
   if (target_metadata == nullptr) {
@@ -147,8 +150,8 @@ absl::StatusOr<bool> ApplyXlaTransforms::RunImpl(
     const absl::flat_hash_set<absl::string_view>& execution_threads) {
   VLOG(1) << "ApplyXlaTransforms ENTRY";
   XLA_VLOG_LINES(1, module->ToString());
-  ABSL_ASSIGN_OR_RETURN(bool changed,
-                        ApplyXlaTransformsToModule(stage_, module));
+  ABSL_ASSIGN_OR_RETURN(
+      bool changed, ApplyXlaTransformsToModule(stage_, module, context_.get()));
   if (changed) {
     ABSL_RETURN_IF_ERROR(verifier_->Run(module, execution_threads).status());
   }

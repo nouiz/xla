@@ -61,6 +61,11 @@ class CApiXlaTransformAdapter : public HloXlaTransform {
   }
 
   absl::StatusOr<bool> Transform(xla::HloModule* module) override {
+    return Transform(module, nullptr);
+  }
+
+  absl::StatusOr<bool> Transform(
+      xla::HloModule* module, const HloXlaTransformContext* context) override {
     xla::HloModuleProto proto = module->ToProto();
     std::string serialized_proto;
     if (!tsl::SerializeToStringDeterministic(proto, &serialized_proto)) {
@@ -74,6 +79,21 @@ class CApiXlaTransformAdapter : public HloXlaTransform {
     args.header.has_error = false;
     args.hlo_module.data = serialized_proto.data();
     args.hlo_module.size = serialized_proto.size();
+    std::string serialized_scheduling_analysis;
+    if (context != nullptr && context->scheduling_analysis.has_value()) {
+      if (!tsl::SerializeToStringDeterministic(
+              *context->scheduling_analysis, &serialized_scheduling_analysis)) {
+        return absl::InternalError(
+            "CApiXlaTransformAdapter: failed to serialize scheduling "
+            "analysis");
+      }
+      args.scheduling_analysis.data = serialized_scheduling_analysis.data();
+      args.scheduling_analysis.size = serialized_scheduling_analysis.size();
+      args.scheduling_analysis_source.data =
+          context->scheduling_analysis_source.data();
+      args.scheduling_analysis_source.size =
+          context->scheduling_analysis_source.size();
+    }
 
     if (callbacks_->transform_hlo_module == nullptr) {
       return absl::InternalError("transform_hlo_module callback is null");

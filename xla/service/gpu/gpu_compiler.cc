@@ -2883,9 +2883,9 @@ GpuCompiler::CompileToBackendResult(
   HloPassPipeline pipeline("scheduled-gpu-module");
   AddHloVerifier(&pipeline);
   ABSL_RETURN_IF_ERROR(pipeline.Run(module).status());
-  ABSL_RETURN_IF_ERROR(
-      RunPostSchedulingPipelines(module, schedule_metadata.scheduler_mem_limit,
-                                 gpu_topology, alias_info.get(), mlir_context));
+  ABSL_RETURN_IF_ERROR(RunPostSchedulingPipelines(
+      module, schedule_metadata.scheduler_mem_limit, gpu_topology,
+      alias_info.get(), mlir_context, schedule_metadata.transform_context));
 
   MaybeOwningThreadPool thread_pool = CreateMaybeOwningThreadPool(
       /*parallelism=*/module->config()
@@ -3342,14 +3342,16 @@ HloRematerialization::Options CreateRematOpts(
 absl::Status GpuCompiler::RunPostSchedulingPipelines(
     HloModule* module, int64_t scheduler_mem_limit,
     const GpuTopology& gpu_topology, const GpuAliasInfo* alias_info,
-    mlir::MLIRContext* mlir_context) {
+    mlir::MLIRContext* mlir_context,
+    std::shared_ptr<const HloXlaTransformContext> transform_context) {
   tsl::profiler::TraceMe traceme("RunPostSchedulingPipelines");
   ABSL_RETURN_IF_ERROR(
       RunPostSchedulingCopyInsertion(module, &gpu_topology, alias_info));
   {
     HloPassPipeline post_scheduler_pipeline("post-scheduler-xla-transforms");
     post_scheduler_pipeline.AddPass<ApplyXlaTransforms>(
-        HloXlaTransform::PipelineStage::kPostScheduler);
+        HloXlaTransform::PipelineStage::kPostScheduler,
+        /*target_metadata=*/nullptr, std::move(transform_context));
     ABSL_RETURN_IF_ERROR(post_scheduler_pipeline.Run(module).status());
   }
   HloPassPipeline main_pipeline("post-scheduling-passes");

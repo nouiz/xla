@@ -25,7 +25,7 @@ limitations under the License.
 extern "C" {
 #endif
 
-#define PJRT_API_XLA_TRANSFORM_EXTENSION_VERSION 1
+#define PJRT_API_XLA_TRANSFORM_EXTENSION_VERSION 2
 
 typedef struct PJRT_XlaTransform_string {
   const char* data;
@@ -68,8 +68,15 @@ typedef struct PJRT_XlaTransform_Args {
   // Out: Serialized HloModuleProto
   PJRT_XlaTransform_string transformed_hlo_module;
   bool changed;  // out
+
+  // In: Serialized tensorflow.profiler.ProfiledInstructionsProto. Empty when
+  // scheduling analysis is unavailable.
+  PJRT_XlaTransform_string scheduling_analysis;
+
+  // In: Human-readable provenance of scheduling_analysis.
+  PJRT_XlaTransform_string scheduling_analysis_source;
 } PJRT_XlaTransform_Args;
-PJRT_DEFINE_STRUCT_TRAITS(PJRT_XlaTransform_Args, changed);
+PJRT_DEFINE_STRUCT_TRAITS(PJRT_XlaTransform_Args, scheduling_analysis_source);
 
 // List of callbacks that the caller (callback implementation)
 // should provide. All callbacks are optional, and may be set to NULL.

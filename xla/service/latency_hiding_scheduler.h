@@ -533,17 +533,27 @@ class SchedulingContext {
   // first use and should not be used across passes as the module may have
   // changed.
  public:
+  using InstructionCostObserver =
+      std::function<void(const HloInstruction&, LatencyEstimator::TimeCost)>;
+  using EdgeLatencyObserver =
+      std::function<void(const HloInstruction&, const HloInstruction&,
+                         LatencyEstimator::TimeCost)>;
+
   SchedulingContext(const HloModule* module,
                     std::shared_ptr<const LatencyEstimator> latency_estimator,
                     std::shared_ptr<AsyncTracker> async_tracker,
                     const AliasInfo* alias_info,
                     const HloCostAnalysis::ShapeSizeFunction& shape_size_bytes =
-                        HloCostAnalysis::DefaultShapeSize)
+                        HloCostAnalysis::DefaultShapeSize,
+                    InstructionCostObserver instruction_cost_observer = nullptr,
+                    EdgeLatencyObserver edge_latency_observer = nullptr)
       : latency_estimator_(std::move(latency_estimator)),
         async_tracker_(std::move(async_tracker)),
         alias_info_(alias_info),
         shape_size_bytes_(shape_size_bytes),
-        module_(module) {}
+        module_(module),
+        instruction_cost_observer_(std::move(instruction_cost_observer)),
+        edge_latency_observer_(std::move(edge_latency_observer)) {}
 
   std::shared_ptr<const HloAliasAnalysis> GetAliasAnalysis() const {
     // Lazy initialization of alias analysis on first use.
@@ -566,6 +576,21 @@ class SchedulingContext {
 
   const AliasInfo* GetAliasInfo() const { return alias_info_; }
 
+  void ObserveInstructionCost(const HloInstruction& instruction,
+                              LatencyEstimator::TimeCost cost) const {
+    if (instruction_cost_observer_ != nullptr) {
+      instruction_cost_observer_(instruction, cost);
+    }
+  }
+
+  void ObserveEdgeLatency(const HloInstruction& source,
+                          const HloInstruction& target,
+                          LatencyEstimator::TimeCost latency) const {
+    if (edge_latency_observer_ != nullptr) {
+      edge_latency_observer_(source, target, latency);
+    }
+  }
+
  private:
   mutable std::shared_ptr<const HloAliasAnalysis> alias_analysis_;
   std::shared_ptr<const LatencyEstimator> latency_estimator_;
@@ -573,6 +598,8 @@ class SchedulingContext {
   const AliasInfo* alias_info_;
   const HloCostAnalysis::ShapeSizeFunction shape_size_bytes_;
   const HloModule* module_;
+  InstructionCostObserver instruction_cost_observer_;
+  EdgeLatencyObserver edge_latency_observer_;
 };
 
 // Tracks user annotations for scheduling.
