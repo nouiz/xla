@@ -751,7 +751,8 @@ RunLatencyHidingSchedulerPasses(HloModule* module, int pointer_size,
           [analysis, cycles_per_microsecond](
               const HloInstruction& source, const HloInstruction& target,
               LatencyEstimator::TimeCost latency) {
-            analysis->latencies_us[{source.name(), target.name()}] =
+            analysis->latencies_us[std::make_pair(
+                std::string(source.name()), std::string(target.name()))] =
                 latency / cycles_per_microsecond;
           });
 
